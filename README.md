@@ -10,7 +10,7 @@ Spiking neural networks for image classification using Nengo and NengoDL.
 
 <img src="/outputs_learning/communication.jpeg" alt="Alt text">
 
-<img src="/outputs_learning/tun_cur.jpeg" alt="Alt text">
+<img src="/outputs_learning/tun_cur.jpeg" alt="Alt text" width="600" height="400">
 
 
 ### Classification
