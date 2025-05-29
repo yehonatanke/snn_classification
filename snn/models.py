@@ -2,6 +2,10 @@ import nengo
 import numpy as np
 import matplotlib.pyplot as plt
 from nengo.processes import WhiteSignal
+import nengo_dl
+import nengo_loihi
+import tensorflow as tf
+import os
 
 # Communication channel
 def communication_channel(run_time=10.0, n_neurons=60, white_signal_high=5, white_signal_rms=0.5, seed=None, plot=True):
@@ -143,4 +147,102 @@ def lif_tuning_curve(Rm=1000, Cm=5e-6, t_ref=10e-3, v_th=1, la=0.05, plot=True):
         plt.xlabel("Input current")
         plt.tight_layout()
         plt.show()
-    return I, A3, A4 
+    return I, A3, A4
+
+def conv_layer(x, n_filters, input_shape, kernel_size=(1, 1), strides=(1, 1), activation=True, init=np.ones):
+    """Create a convolutional layer with optional activation."""
+    conv = nengo.Convolution(
+        n_filters, input_shape, channels_last=False, kernel_size=kernel_size, strides=strides, init=init
+    )
+    layer = nengo.Ensemble(conv.output_shape.size, 1).neurons if activation else nengo.Node(size_in=conv.output_shape.size)
+    nengo.Connection(x, layer, transform=conv)
+    
+    print("LAYER")
+    print(conv.input_shape.shape, "->", conv.output_shape.shape)
+    
+    return layer, conv
+
+def build_network(
+    input_shape=(1, 28, 28),
+    n_parallel=2,
+    dt=0.001,
+    presentation_time=0.1,
+    max_rate=100,
+    seed=0
+):
+    """Build the neural network for MNIST classification."""
+    amp = 1 / max_rate
+    with nengo.Network(seed=seed) as net:
+        nengo_loihi.add_params(net)
+        net.config[nengo.Ensemble].neuron_type = nengo.SpikingRectifiedLinear(amplitude=amp)
+        net.config[nengo.Ensemble].max_rates = nengo.dists.Choice([max_rate])
+        net.config[nengo.Ensemble].intercepts = nengo.dists.Choice([0])
+        net.config[nengo.Connection].synapse = None
+
+        inp = nengo.Node(
+            nengo.processes.PresentInput(np.zeros((1, input_shape[1] * input_shape[2])), presentation_time),
+            size_out=input_shape[1] * input_shape[2]
+        )
+        out = nengo.Node(size_in=10)
+
+        for _ in range(n_parallel):
+            layer, conv = conv_layer(inp, 1, input_shape, kernel_size=(1, 1), init=np.ones((1, 1, 1, 1)))
+            net.config[layer.ensemble].on_chip = False
+            layer, conv = conv_layer(layer, 6, conv.output_shape, strides=(2, 2))
+            layer, conv = conv_layer(layer, 24, conv.output_shape, strides=(2, 2))
+            nengo.Connection(layer, out, transform=nengo_dl.dists.Glorot())
+
+        out_p = nengo.Probe(out, label="out_p")
+        out_p_filt = nengo.Probe(out, synapse=nengo.Alpha(0.01), label="out_p_filt")
+    
+    return net, inp, out, out_p, out_p_filt
+
+def load_file_from_folder(fname, folder_path='params/mnist_params.npz'):
+    """Load parameters from a file."""
+    file_path = os.path.join(folder_path, fname)
+    if os.path.exists(file_path):
+        return
+    raise RuntimeError(
+        f"Cannot find '{fname}' in {folder_path}. "
+    )
+
+def train_and_evaluate(
+    net, inp, out_p_filt, train_images, train_labels, test_images, test_labels,
+    minibatch_size=200, epochs=5, do_training=False, param_file="mnist_params.npz", folder_path="params"
+):
+    """Train and evaluate the network using Nengo-DL."""
+    with nengo_dl.Simulator(net, minibatch_size=minibatch_size, seed=0) as sim:
+        if do_training:
+            sim.compile(loss={out_p_filt: classification_accuracy})
+            print(
+                f"Accuracy before training: {sim.evaluate(test_images, {out_p_filt: test_labels}, verbose=0)['loss']:.2f}%"
+            )
+            sim.compile(
+                optimizer=tf.optimizers.RMSprop(0.001),
+                loss={out_p_filt: tf.losses.SparseCategoricalCrossentropy(from_logits=True)}
+            )
+            sim.fit(train_images, train_labels, epochs=epochs)
+            sim.compile(loss={out_p_filt: classification_accuracy})
+            print(
+                f"Accuracy after training: {sim.evaluate(test_images, {out_p_filt: test_labels}, verbose=0)['loss']:.2f}%"
+            )
+            sim.save_params(os.path.join(folder_path, param_file))
+        else:
+            load_file_from_folder(param_file, folder_path)
+            sim.load_params(os.path.join(folder_path, param_file))
+        sim.freeze_params(net)
+    return sim
+
+def evaluate_loihi(
+    net, out_p_filt, test_images, test_labels, presentation_time, dt,
+    n_presentations=50, snip_max_spikes_per_step=120
+):
+    """Evaluate the network on Loihi hardware."""
+    hw_opts = dict(snip_max_spikes_per_step=snip_max_spikes_per_step)
+    with nengo_loihi.Simulator(net, dt=dt, precompute=False, hardware_options=hw_opts) as sim:
+        sim.run(n_presentations * presentation_time)
+        step = int(presentation_time / dt)
+        output = sim.data[out_p_filt][step - 1 :: step]
+        correct = 100 * np.mean(np.argmax(output, axis=-1) == test_labels[:n_presentations, -1, 0])
+        print(f"Loihi accuracy: {correct:.2f}%")
+    return correct 

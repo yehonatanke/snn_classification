@@ -2,6 +2,21 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 
+def load_and_preprocess_mnist():
+    (train_images, train_labels), (test_images, test_labels) = tf.keras.datasets.mnist.load_data()
+    train_images = train_images.reshape((train_images.shape[0], -1))
+    test_images = test_images.reshape((test_images.shape[0], -1))
+    return train_images, train_labels, test_images, test_labels
+
+def prepare_data(train_images, train_labels, test_images, test_labels, presentation_time, dt, minibatch_size=200):
+    """Prepare training and testing data for simulation."""
+    train_images = train_images[:, None, :]
+    train_labels = train_labels[:, None, None]
+    n_steps = int(presentation_time / dt)
+    test_images = np.tile(test_images[:minibatch_size * 2, None, :], (1, n_steps, 1))
+    test_labels = np.tile(test_labels[:minibatch_size * 2, None, None], (1, n_steps, 1))
+    return train_images, train_labels, test_images, test_labels
+
 def load_dataset(name='mnist', flatten=True, normalize=True, augment=False, custom_data=None):
     """Load and preprocess dataset."""
     if custom_data is not None:

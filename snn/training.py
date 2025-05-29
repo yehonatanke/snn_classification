@@ -3,8 +3,9 @@ import tensorflow as tf
 import nengo
 import nengo_dl
 import matplotlib.pyplot as plt
-from .datasets import load_dataset
-from .plotting import plot_predictions, plot_confusion_matrix_from_preds, print_classification_report
+from .datasets import load_dataset, load_and_preprocess_mnist, prepare_data
+from .plotting import plot_predictions, plot_confusion_matrix_from_preds, print_classification_report, plot_mnist_examples, plot_results
+from .models import build_network, train_and_evaluate, evaluate_loihi
 
 def classification(
     do_training=False,
@@ -85,4 +86,59 @@ def classification(
     return sim, data
 
 def show_predictions(data, test_images, out_p_filt, minibatch_size=5, test_labels=None):
-    plot_predictions(data, test_images, out_p_filt, num_samples=minibatch_size) 
+    plot_predictions(data, test_images, out_p_filt, num_samples=minibatch_size)
+
+def run_snn_model(
+    input_shape=(1, 28, 28),
+    n_parallel=2,
+    dt=0.001,
+    presentation_time=0.1,
+    max_rate=100,
+    minibatch_size=200,
+    epochs=5,
+    do_training=False,
+    n_presentations=50,
+    n_plots=3,
+    param_file="mnist_params.npz",
+    folder_path="params",
+    snip_max_spikes_per_step=120,
+    seed=0
+):
+    """Run the complete SNN model training and evaluation pipeline."""
+    train_images, train_labels, test_images, test_labels = load_and_preprocess_mnist()
+    plot_mnist_examples(train_images, train_labels, n_examples=n_plots)
+    
+    train_images, train_labels, test_images, test_labels = prepare_data(
+        train_images, train_labels, test_images, test_labels, presentation_time, dt, minibatch_size
+    )
+    
+    net, inp, out, out_p, out_p_filt = build_network(
+        input_shape, n_parallel, dt, presentation_time, max_rate, seed
+    )
+    
+    # Train or load parameters
+    sim = train_and_evaluate(
+        net, inp, out_p_filt, train_images, train_labels, test_images, test_labels,
+        minibatch_size, epochs, do_training, param_file, folder_path
+    )
+    
+    # Add synapse to connections
+    for conn in net.all_connections:
+        conn.synapse = 0.005
+    
+    # Evaluate with synapse
+    if do_training:
+        with nengo_dl.Simulator(net, minibatch_size=minibatch_size) as sim_eval:
+            sim_eval.compile(loss={out_p_filt: classification_accuracy})
+            print(
+                f"Accuracy w/ synapse: {sim_eval.evaluate(test_images, {out_p_filt: test_labels}, verbose=0)['loss']:.2f}%"
+            )
+    
+    # Evaluate on Loihi
+    loihi_accuracy = evaluate_loihi(
+        net, out_p_filt, test_images, test_labels, presentation_time, dt,
+        n_presentations, snip_max_spikes_per_step
+    )
+    
+    # Plot results
+    plot_results(test_images, test_labels, sim, out_p_filt, presentation_time, dt, n_plots) 

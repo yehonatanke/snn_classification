@@ -50,4 +50,36 @@ def spike_raster_plot(spikes, title="Spike Raster"):
     plt.xlabel('Time step')
     plt.ylabel('Neuron')
     plt.tight_layout()
+    plt.show()
+
+def plot_mnist_examples(images, labels, n_examples=3):
+    """Plot MNIST example images with their labels."""
+    for i in range(n_examples):
+        plt.figure()
+        plt.imshow(np.reshape(images[i], (28, 28)), cmap="gray")
+        plt.axis("off")
+        plt.title(str(labels[i]))
+        plt.show()
+
+def plot_results(test_images, test_labels, sim, out_p_filt, presentation_time, dt, n_plots=3):
+    """Plot input images and network output."""
+    step = int(presentation_time / dt)
+    plt.figure(figsize=(10, 6))
+    
+    plt.subplot(2, 1, 1)
+    images = test_images.reshape(-1, 28, 28, 1)[::step]
+    ni, nj, nc = images[0].shape
+    allimage = np.zeros((ni, nj * n_plots, nc), dtype=images.dtype)
+    for i, image in enumerate(images[:n_plots]):
+        allimage[:, i * nj : (i + 1) * nj] = image
+    if allimage.shape[-1] == 1:
+        allimage = allimage[:, :, 0]
+    plt.imshow(allimage, aspect="auto", interpolation="none", cmap="gray")
+    plt.axis("off")
+    
+    plt.subplot(2, 1, 2)
+    plt.plot(sim.trange()[:n_plots * step], sim.data[out_p_filt][:n_plots * step])
+    plt.legend([str(i) for i in range(10)], loc="best")
+    plt.xlabel("Time (s)")
+    plt.ylabel("Output")
     plt.show() 
