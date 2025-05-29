@@ -1,0 +1,6 @@
+nengo
+nengo_dl
+tensorflow
+matplotlib
+numpy
+seaborn 
